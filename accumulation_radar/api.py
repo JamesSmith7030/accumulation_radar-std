@@ -12,6 +12,7 @@ _min_interval = 0.05  # 50ms between requests (20 req/s)
 
 def api_get(endpoint, params=None):
     """币安API请求（3次重试 + 令牌桶限速 + 线程安全）"""
+    global _last_request
     url = f"{FAPI}{endpoint}"
     for attempt in range(3):
         with _lock:
