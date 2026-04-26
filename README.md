@@ -86,7 +86,7 @@
 ## 安装
 
 ```bash
-git clone https://github.com/chencore/accumulation_radar.git
+git clone git@js7030.github.com:JamesSmith7030/accumulation_radar-std.git accumulation_radar
 cd accumulation_radar
 
 pip install -r requirements.txt
@@ -120,27 +120,47 @@ python -m accumulation_radar oi
 python -m accumulation_radar full
 ```
 
-### Crontab 配置
+### Ubuntu 22.04 一键部署（推荐）
 
-```crontab
-0 10 * * *  cd /path/to/accumulation-radar && python -m accumulation_radar pool >> accumulation.log 2>&1
-30 * * * *  cd /path/to/accumulation-radar && python -m accumulation_radar oi >> accumulation_oi.log 2>&1
-```
-
-### Ubuntu 22.04 一键部署
-
-服务器当前用户为 `ubuntu` 且有 sudo 权限时，可以用脚本安装依赖、拉取代码、创建虚拟环境，并配置 systemd 定时任务：
+服务器当前用户为 `ubuntu` 且有 sudo 权限时，推荐使用 systemd timer 部署。脚本会安装系统依赖、拉取或更新代码、创建虚拟环境、写入环境变量文件，并配置两个定时任务：
 
 ```bash
 bash scripts/deploy_ubuntu22.sh
 ```
 
-默认部署到 `/opt/accumulation_radar/app`，环境变量文件为 `/etc/accumulation_radar.env`，每天 10:00 跑 `pool`，每小时 30 分跑 `oi`。
+默认值：
 
-也可以用环境变量覆盖默认值：
+| 配置 | 默认值 |
+|------|--------|
+| 代码仓库 | `git@js7030.github.com:JamesSmith7030/accumulation_radar-std.git` |
+| 部署目录 | `/opt/accumulation_radar/app` |
+| 环境文件 | `/etc/accumulation_radar.env` |
+| Python | `/usr/bin/python3` |
+| pool | 每天 `10:00:00` |
+| oi | 每小时第 `30` 分钟 |
+
+脚本会使用 `/usr/bin/python3` 重建 `.venv`。这样可以避免 mise、pyenv、asdf 等用户目录里的 Python 被 systemd `ProtectHome=true` 隔离。
+
+第一次运行时可以按提示输入 Telegram 配置；也可以部署后编辑：
 
 ```bash
-TG_BOT_TOKEN=xxx TG_CHAT_ID=yyy DEPLOY_REF=main bash scripts/deploy_ubuntu22.sh
+sudo nano /etc/accumulation_radar.env
+```
+
+环境变量示例：
+
+```bash
+TG_BOT_TOKEN=
+TG_CHAT_ID=
+TZ=Asia/Shanghai
+```
+
+常用覆盖项：
+
+```bash
+DEPLOY_REF=main bash scripts/deploy_ubuntu22.sh
+RUN_NOW=0 bash scripts/deploy_ubuntu22.sh
+REPO_URL=https://github.com/JamesSmith7030/accumulation_radar-std.git bash scripts/deploy_ubuntu22.sh
 ```
 
 查看任务和日志：
@@ -148,6 +168,33 @@ TG_BOT_TOKEN=xxx TG_CHAT_ID=yyy DEPLOY_REF=main bash scripts/deploy_ubuntu22.sh
 ```bash
 systemctl list-timers "accumulation-radar*"
 sudo journalctl -u 'accumulation-radar@*.service' -n 100 --no-pager
+```
+
+手动运行：
+
+```bash
+sudo systemctl start accumulation-radar@pool.service
+sudo systemctl start accumulation-radar@oi.service
+sudo systemctl start accumulation-radar@full.service
+```
+
+更新部署：
+
+```bash
+cd /opt/accumulation_radar/app
+git pull --ff-only
+bash scripts/deploy_ubuntu22.sh
+```
+
+如果已经使用一键部署，不需要再配置 crontab，否则会重复扫描和重复推送。
+
+### Crontab 配置（备选）
+
+不使用 systemd timer 时，才需要手动配置 crontab：
+
+```crontab
+0 10 * * *  cd /path/to/accumulation-radar && python -m accumulation_radar pool >> accumulation.log 2>&1
+30 * * * *  cd /path/to/accumulation-radar && python -m accumulation_radar oi >> accumulation_oi.log 2>&1
 ```
 
 ## 推送示例

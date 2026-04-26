@@ -1,8 +1,23 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+#
+# Ubuntu 22.04 一键部署脚本。
+#
+# 功能：
+#   1. 安装系统依赖。
+#   2. 拉取或更新代码。
+#   3. 使用系统 Python 创建虚拟环境。
+#   4. 写入生产环境变量文件。
+#   5. 创建 systemd service 和 timer。
+#   6. 可选立即运行一次 pool 和 oi。
+#
+# 约定：
+#   - 默认部署用户为当前 sudo 用户；如果以 root 直接执行，则默认为 ubuntu。
+#   - 默认代码目录为 /opt/accumulation_radar/app。
+#   - 默认环境变量文件为 /etc/accumulation_radar.env。
+#   - 默认使用 /usr/bin/python3，避免 mise/pyenv/asdf 的 Python 位于 /home 后被 systemd
+#     的 ProtectHome=true 隔离。
 
-# One-command deployment for Ubuntu 22.04.
-# Defaults are tuned for the "ubuntu" user with sudo privileges.
+set -Eeuo pipefail
 
 REPO_URL="${REPO_URL:-git@js7030.github.com:JamesSmith7030/accumulation_radar-std.git}"
 APP_ROOT="${APP_ROOT:-/opt/accumulation_radar}"
@@ -20,12 +35,13 @@ DEFAULT_USER="${SUDO_USER:-$(id -un)}"
 if [[ "$DEFAULT_USER" == "root" ]]; then
   DEFAULT_USER="ubuntu"
 fi
+
 APP_USER="${APP_USER:-$DEFAULT_USER}"
 APP_GROUP="${APP_GROUP:-$APP_USER}"
 
-SERVICE_NAME="accumulation-radar@.service"
-POOL_TIMER="accumulation-radar-pool.timer"
-OI_TIMER="accumulation-radar-oi.timer"
+readonly SERVICE_NAME="accumulation-radar@.service"
+readonly POOL_TIMER="accumulation-radar-pool.timer"
+readonly OI_TIMER="accumulation-radar-oi.timer"
 
 if [[ "$EUID" -eq 0 ]]; then
   SUDO=()
@@ -43,57 +59,70 @@ die() {
 }
 
 on_error() {
-  die "部署失败，出错行号: $1。可用 journalctl -u 'accumulation-radar@*.service' -n 100 --no-pager 查看服务日志。"
+  local line_no="$1"
+  die "部署失败，出错行号: ${line_no}。请执行：sudo journalctl -u 'accumulation-radar@*.service' -n 100 --no-pager"
 }
-trap 'on_error "$LINENO"' ERR
 
 usage() {
-  cat <<EOF
-Usage:
+  cat <<'EOF'
+用法：
   bash scripts/deploy_ubuntu22.sh
 
-Common environment overrides:
+常用环境变量：
   REPO_URL=git@js7030.github.com:JamesSmith7030/accumulation_radar-std.git
   DEPLOY_REF=main
   APP_USER=ubuntu
   APP_ROOT=/opt/accumulation_radar
   ENV_FILE=/etc/accumulation_radar.env
-  TG_BOT_TOKEN=...
-  TG_CHAT_ID=...
+  PYTHON_BIN=/usr/bin/python3
   RUN_NOW=0
   NO_PROMPT=1
 
-Examples:
+Telegram 配置：
+  TG_BOT_TOKEN=xxx
+  TG_CHAT_ID=yyy
+
+示例：
   bash scripts/deploy_ubuntu22.sh
-  TG_BOT_TOKEN=xxx TG_CHAT_ID=yyy bash scripts/deploy_ubuntu22.sh
-  RUN_NOW=0 DEPLOY_REF=main bash scripts/deploy_ubuntu22.sh
+  DEPLOY_REF=main bash scripts/deploy_ubuntu22.sh
+  RUN_NOW=0 NO_PROMPT=1 bash scripts/deploy_ubuntu22.sh
 EOF
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
+run_as_app_user() {
+  if [[ "$(id -un)" == "$APP_USER" && "$EUID" -ne 0 ]]; then
+    "$@"
+  elif [[ "$EUID" -eq 0 ]]; then
+    runuser -u "$APP_USER" -- "$@"
+  else
+    "${SUDO[@]}" -u "$APP_USER" "$@"
+  fi
+}
 
 validate_inputs() {
   [[ "$POOL_TIME" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$ ]] || die "POOL_TIME 必须形如 10:00:00"
   [[ "$OI_MINUTE" =~ ^[0-5]?[0-9]$ ]] || die "OI_MINUTE 必须是 0-59"
-  local oi_minute_num=$((10#$OI_MINUTE))
+
+  local oi_minute_num
+  oi_minute_num=$((10#$OI_MINUTE))
   if (( oi_minute_num < 0 || oi_minute_num > 59 )); then
     die "OI_MINUTE 必须是 0-59"
   fi
   OI_MINUTE="$(printf '%02d' "$oi_minute_num")"
+
   id "$APP_USER" >/dev/null 2>&1 || die "用户不存在: $APP_USER"
   getent group "$APP_GROUP" >/dev/null 2>&1 || die "用户组不存在: $APP_GROUP"
 }
 
 warn_if_not_ubuntu_2204() {
-  if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "22.04" ]]; then
-      log "提示: 当前系统是 ${PRETTY_NAME:-unknown}，脚本按 Ubuntu 22.04 设计，继续执行。"
-    fi
+  if [[ ! -r /etc/os-release ]]; then
+    return
+  fi
+
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "22.04" ]]; then
+    log "提示：当前系统是 ${PRETTY_NAME:-unknown}，脚本按 Ubuntu 22.04 设计，继续执行。"
   fi
 }
 
@@ -115,16 +144,6 @@ prepare_app_dir() {
   "${SUDO[@]}" chown -R "$APP_USER:$APP_GROUP" "$APP_ROOT"
 }
 
-run_as_app_user() {
-  if [[ "$(id -un)" == "$APP_USER" && "$EUID" -ne 0 ]]; then
-    "$@"
-  elif [[ "$EUID" -eq 0 ]]; then
-    runuser -u "$APP_USER" -- "$@"
-  else
-    "${SUDO[@]}" -u "$APP_USER" "$@"
-  fi
-}
-
 pull_current_branch_if_possible() {
   if run_as_app_user git -C "$APP_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
     run_as_app_user git -C "$APP_DIR" pull --ff-only
@@ -135,33 +154,23 @@ pull_current_branch_if_possible() {
 
 checkout_code() {
   log "拉取或更新代码: $REPO_URL"
+
   if [[ ! -d "$APP_DIR/.git" ]]; then
     run_as_app_user git clone "$REPO_URL" "$APP_DIR"
   else
     run_as_app_user git -C "$APP_DIR" remote set-url origin "$REPO_URL"
     run_as_app_user git -C "$APP_DIR" fetch --prune origin
+
     if [[ -n "$DEPLOY_REF" ]]; then
       run_as_app_user git -C "$APP_DIR" checkout "$DEPLOY_REF"
-      pull_current_branch_if_possible
-    else
-      pull_current_branch_if_possible
     fi
+
+    pull_current_branch_if_possible
   fi
 
-  if [[ -n "$DEPLOY_REF" && ! -d "$APP_DIR/.git/rebase-merge" ]]; then
+  if [[ -n "$DEPLOY_REF" ]]; then
     run_as_app_user git -C "$APP_DIR" checkout "$DEPLOY_REF"
   fi
-}
-
-install_python_deps() {
-  log "创建虚拟环境并安装 Python 依赖"
-  [[ -x "$PYTHON_BIN" ]] || die "找不到可执行 Python: $PYTHON_BIN。可用 PYTHON_BIN=/path/to/python3 覆盖。"
-  run_as_app_user "$PYTHON_BIN" -m venv --clear "$APP_DIR/.venv"
-  VENV_PYTHON="$(resolve_venv_python)"
-  assert_venv_python_systemd_visible "$VENV_PYTHON"
-  run_as_app_user "$VENV_PYTHON" -m pip install --upgrade pip
-  run_as_app_user "$VENV_PYTHON" -m pip install -r "$APP_DIR/requirements.txt"
-  run_as_app_user "$VENV_PYTHON" -m compileall -q "$APP_DIR/accumulation_radar"
 }
 
 resolve_venv_python() {
@@ -172,21 +181,39 @@ resolve_venv_python() {
       return 0
     fi
   done
+
   die "虚拟环境里没有找到可执行 Python，请检查 $APP_DIR/.venv/bin/"
 }
 
 assert_venv_python_systemd_visible() {
   local python_path="$1"
   local resolved_path
+
   resolved_path="$(run_as_app_user readlink -f "$python_path")"
   if [[ "$resolved_path" == /home/* ]]; then
-    die "虚拟环境 Python 指向 $resolved_path；systemd 的 ProtectHome=true 会阻止访问。请使用默认 /usr/bin/python3，或传 PYTHON_BIN=/usr/bin/python3 后重跑。"
+    die "虚拟环境 Python 指向 $resolved_path；systemd 的 ProtectHome=true 会阻止访问。请使用 /usr/bin/python3 重建虚拟环境。"
   fi
+
   log "虚拟环境 Python: $python_path -> $resolved_path"
+}
+
+install_python_deps() {
+  log "创建虚拟环境并安装 Python 依赖"
+
+  [[ -x "$PYTHON_BIN" ]] || die "找不到可执行 Python: $PYTHON_BIN。可用 PYTHON_BIN=/path/to/python3 覆盖。"
+
+  run_as_app_user "$PYTHON_BIN" -m venv --clear "$APP_DIR/.venv"
+  VENV_PYTHON="$(resolve_venv_python)"
+  assert_venv_python_systemd_visible "$VENV_PYTHON"
+
+  run_as_app_user "$VENV_PYTHON" -m pip install --upgrade pip
+  run_as_app_user "$VENV_PYTHON" -m pip install -r "$APP_DIR/requirements.txt"
+  run_as_app_user "$VENV_PYTHON" -m compileall -q "$APP_DIR/accumulation_radar"
 }
 
 read_env_value() {
   local key="$1"
+
   if [[ -f "$ENV_FILE" ]]; then
     "${SUDO[@]}" awk -v key="$key" 'BEGIN { FS = "=" } $1 == key { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE" 2>/dev/null || true
   fi
@@ -197,15 +224,18 @@ write_env_file() {
   local chat_id="$2"
   local timezone="${3:-Asia/Shanghai}"
   local tmp_file
+
   tmp_file="$(mktemp)"
   chmod 600 "$tmp_file"
+
   {
-    printf '# Managed by scripts/deploy_ubuntu22.sh\n'
-    printf '# Leave Telegram values empty to print reports to journald/stdout.\n'
+    printf '# 由 scripts/deploy_ubuntu22.sh 生成。\n'
+    printf '# Telegram 值可以留空；留空时报告会输出到 journald/stdout。\n'
     printf 'TG_BOT_TOKEN=%s\n' "$bot_value"
     printf 'TG_CHAT_ID=%s\n' "$chat_id"
     printf 'TZ=%s\n' "$timezone"
   } >"$tmp_file"
+
   "${SUDO[@]}" install -o "$APP_USER" -g "$APP_GROUP" -m 600 "$tmp_file" "$ENV_FILE"
   rm -f "$tmp_file"
 }
@@ -230,6 +260,7 @@ configure_env_file() {
       IFS= read -r -s bot_value
       printf '\n'
     fi
+
     if [[ -z "$chat_id" ]]; then
       printf 'Telegram Chat ID，可留空跳过: '
       IFS= read -r chat_id
@@ -243,7 +274,11 @@ configure_env_file() {
 write_systemd_unit() {
   log "写入 systemd service/timer"
 
-  local service_tmp pool_tmp oi_tmp exec_python
+  local exec_python
+  local service_tmp
+  local pool_tmp
+  local oi_tmp
+
   exec_python="${VENV_PYTHON:-$(resolve_venv_python)}"
   service_tmp="$(mktemp)"
   pool_tmp="$(mktemp)"
@@ -337,6 +372,11 @@ print_summary() {
 }
 
 main() {
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    return 0
+  fi
+
   validate_inputs
   warn_if_not_ubuntu_2204
   install_packages
@@ -349,4 +389,5 @@ main() {
   print_summary
 }
 
+trap 'on_error "$LINENO"' ERR
 main "$@"
