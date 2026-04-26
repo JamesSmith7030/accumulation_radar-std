@@ -14,6 +14,7 @@ OI_MINUTE="${OI_MINUTE:-30}"
 RUN_NOW="${RUN_NOW:-1}"
 NO_PROMPT="${NO_PROMPT:-0}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+VENV_PYTHON=""
 
 DEFAULT_USER="${SUDO_USER:-$(id -un)}"
 if [[ "$DEFAULT_USER" == "root" ]]; then
@@ -155,9 +156,21 @@ checkout_code() {
 install_python_deps() {
   log "创建虚拟环境并安装 Python 依赖"
   run_as_app_user "$PYTHON_BIN" -m venv "$APP_DIR/.venv"
-  run_as_app_user "$APP_DIR/.venv/bin/python" -m pip install --upgrade pip
-  run_as_app_user "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
-  run_as_app_user "$APP_DIR/.venv/bin/python" -m compileall -q "$APP_DIR/accumulation_radar"
+  VENV_PYTHON="$(resolve_venv_python)"
+  run_as_app_user "$VENV_PYTHON" -m pip install --upgrade pip
+  run_as_app_user "$VENV_PYTHON" -m pip install -r "$APP_DIR/requirements.txt"
+  run_as_app_user "$VENV_PYTHON" -m compileall -q "$APP_DIR/accumulation_radar"
+}
+
+resolve_venv_python() {
+  local candidate
+  for candidate in "$APP_DIR/.venv/bin/python3" "$APP_DIR/.venv/bin/python"; do
+    if run_as_app_user test -x "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  die "虚拟环境里没有找到可执行 Python，请检查 $APP_DIR/.venv/bin/"
 }
 
 read_env_value() {
@@ -168,7 +181,7 @@ read_env_value() {
 }
 
 write_env_file() {
-  local token="$1"
+  local bot_value="$1"
   local chat_id="$2"
   local timezone="${3:-Asia/Shanghai}"
   local tmp_file
@@ -177,7 +190,7 @@ write_env_file() {
   {
     printf '# Managed by scripts/deploy_ubuntu22.sh\n'
     printf '# Leave Telegram values empty to print reports to journald/stdout.\n'
-    printf 'TG_BOT_TOKEN=%s\n' "$token"
+    printf 'TG_BOT_TOKEN=%s\n' "$bot_value"
     printf 'TG_CHAT_ID=%s\n' "$chat_id"
     printf 'TZ=%s\n' "$timezone"
   } >"$tmp_file"
@@ -188,21 +201,21 @@ write_env_file() {
 configure_env_file() {
   log "配置环境文件: $ENV_FILE"
 
-  local token="${TG_BOT_TOKEN:-}"
+  local bot_value="${TG_BOT_TOKEN:-}"
   local chat_id="${TG_CHAT_ID:-}"
   local timezone="${TZ:-Asia/Shanghai}"
 
   if [[ -f "$ENV_FILE" ]]; then
-    [[ -n "$token" ]] || token="$(read_env_value TG_BOT_TOKEN)"
+    [[ -n "$bot_value" ]] || bot_value="$(read_env_value TG_BOT_TOKEN)"
     [[ -n "$chat_id" ]] || chat_id="$(read_env_value TG_CHAT_ID)"
     timezone="$(read_env_value TZ || true)"
     [[ -n "$timezone" ]] || timezone="Asia/Shanghai"
   fi
 
   if [[ "$NO_PROMPT" != "1" && -t 0 ]]; then
-    if [[ -z "$token" ]]; then
+    if [[ -z "$bot_value" ]]; then
       printf 'Telegram Bot Token，可留空跳过: '
-      IFS= read -r -s token
+      IFS= read -r -s bot_value
       printf '\n'
     fi
     if [[ -z "$chat_id" ]]; then
@@ -211,14 +224,15 @@ configure_env_file() {
     fi
   fi
 
-  write_env_file "$token" "$chat_id" "$timezone"
+  write_env_file "$bot_value" "$chat_id" "$timezone"
   log "环境文件已写入，权限为 600；未输出任何密钥值。"
 }
 
 write_systemd_unit() {
   log "写入 systemd service/timer"
 
-  local service_tmp pool_tmp oi_tmp
+  local service_tmp pool_tmp oi_tmp exec_python
+  exec_python="${VENV_PYTHON:-$(resolve_venv_python)}"
   service_tmp="$(mktemp)"
   pool_tmp="$(mktemp)"
   oi_tmp="$(mktemp)"
@@ -236,7 +250,7 @@ Group=$APP_GROUP
 WorkingDirectory=$APP_DIR
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-$ENV_FILE
-ExecStart=$APP_DIR/.venv/bin/python -m accumulation_radar %i
+ExecStart=$exec_python -m accumulation_radar %i
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
