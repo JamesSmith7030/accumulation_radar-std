@@ -13,7 +13,7 @@ POOL_TIME="${POOL_TIME:-10:00:00}"
 OI_MINUTE="${OI_MINUTE:-30}"
 RUN_NOW="${RUN_NOW:-1}"
 NO_PROMPT="${NO_PROMPT:-0}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 VENV_PYTHON=""
 
 DEFAULT_USER="${SUDO_USER:-$(id -un)}"
@@ -155,8 +155,10 @@ checkout_code() {
 
 install_python_deps() {
   log "创建虚拟环境并安装 Python 依赖"
-  run_as_app_user "$PYTHON_BIN" -m venv "$APP_DIR/.venv"
+  [[ -x "$PYTHON_BIN" ]] || die "找不到可执行 Python: $PYTHON_BIN。可用 PYTHON_BIN=/path/to/python3 覆盖。"
+  run_as_app_user "$PYTHON_BIN" -m venv --clear "$APP_DIR/.venv"
   VENV_PYTHON="$(resolve_venv_python)"
+  assert_venv_python_systemd_visible "$VENV_PYTHON"
   run_as_app_user "$VENV_PYTHON" -m pip install --upgrade pip
   run_as_app_user "$VENV_PYTHON" -m pip install -r "$APP_DIR/requirements.txt"
   run_as_app_user "$VENV_PYTHON" -m compileall -q "$APP_DIR/accumulation_radar"
@@ -171,6 +173,16 @@ resolve_venv_python() {
     fi
   done
   die "虚拟环境里没有找到可执行 Python，请检查 $APP_DIR/.venv/bin/"
+}
+
+assert_venv_python_systemd_visible() {
+  local python_path="$1"
+  local resolved_path
+  resolved_path="$(run_as_app_user readlink -f "$python_path")"
+  if [[ "$resolved_path" == /home/* ]]; then
+    die "虚拟环境 Python 指向 $resolved_path；systemd 的 ProtectHome=true 会阻止访问。请使用默认 /usr/bin/python3，或传 PYTHON_BIN=/usr/bin/python3 后重跑。"
+  fi
+  log "虚拟环境 Python: $python_path -> $resolved_path"
 }
 
 read_env_value() {
