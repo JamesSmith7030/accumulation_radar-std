@@ -4,7 +4,7 @@ set -Eeuo pipefail
 # One-command deployment for Ubuntu 22.04.
 # Defaults are tuned for the "ubuntu" user with sudo privileges.
 
-REPO_URL="${REPO_URL:-git@github.com:JamesSmith7030/accumulation_radar-std.git}"
+REPO_URL="${REPO_URL:-git@js7030.github.com:JamesSmith7030/accumulation_radar-std.git}"
 APP_ROOT="${APP_ROOT:-/opt/accumulation_radar}"
 APP_DIR="${APP_DIR:-$APP_ROOT/app}"
 ENV_FILE="${ENV_FILE:-/etc/accumulation_radar.env}"
