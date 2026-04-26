@@ -127,6 +127,29 @@ python -m accumulation_radar full
 30 * * * *  cd /path/to/accumulation-radar && python -m accumulation_radar oi >> accumulation_oi.log 2>&1
 ```
 
+### Ubuntu 22.04 一键部署
+
+服务器当前用户为 `ubuntu` 且有 sudo 权限时，可以用脚本安装依赖、拉取代码、创建虚拟环境，并配置 systemd 定时任务：
+
+```bash
+bash scripts/deploy_ubuntu22.sh
+```
+
+默认部署到 `/opt/accumulation_radar/app`，环境变量文件为 `/etc/accumulation_radar.env`，每天 10:00 跑 `pool`，每小时 30 分跑 `oi`。
+
+也可以用环境变量覆盖默认值：
+
+```bash
+TG_BOT_TOKEN=xxx TG_CHAT_ID=yyy DEPLOY_REF=main bash scripts/deploy_ubuntu22.sh
+```
+
+查看任务和日志：
+
+```bash
+systemctl list-timers "accumulation-radar*"
+sudo journalctl -u 'accumulation-radar@*.service' -n 100 --no-pager
+```
+
 ## 推送示例
 
 ```
