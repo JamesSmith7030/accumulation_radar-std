@@ -52,7 +52,7 @@ Usage:
   bash scripts/deploy_ubuntu22.sh
 
 Common environment overrides:
-  REPO_URL=git@github.com:JamesSmith7030/accumulation_radar-std.git
+  REPO_URL=git@js7030.github.com:JamesSmith7030/accumulation_radar-std.git
   DEPLOY_REF=main
   APP_USER=ubuntu
   APP_ROOT=/opt/accumulation_radar
@@ -102,10 +102,10 @@ install_packages() {
   "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
     ca-certificates \
     curl \
-    git \
-    python3 \
-    python3-pip \
-    python3-venv
+    git
+    # python3 \
+    # python3-pip \
+    # python3-venv
 }
 
 prepare_app_dir() {
